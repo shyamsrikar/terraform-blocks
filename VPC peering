@@ -1,0 +1,166 @@
+# describe the providers
+provider "aws" {
+  region  = "eu-west-3"
+  profile = "default"
+}
+
+# resource block
+# define two VPCs with their respective CIDR blocks
+resource "aws_vpc" "vpc-1" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_vpc" "vpc-2" {
+  cidr_block = "10.1.0.0/16"
+}
+
+# create subnets with availability zones
+resource "aws_subnet" "subnet-1" {
+  vpc_id            = aws_vpc.vpc-1.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "eu-west-3a"
+}
+
+resource "aws_subnet" "subnet-2" {
+  vpc_id            = aws_vpc.vpc-2.id
+  cidr_block        = "10.1.2.0/24"
+  availability_zone = "eu-west-3b"
+}
+
+# create internet gateways and attach to VPCs
+resource "aws_internet_gateway" "gw-1" {
+  vpc_id = aws_vpc.vpc-1.id
+}
+
+resource "aws_internet_gateway" "gw-2" {
+  vpc_id = aws_vpc.vpc-2.id
+}
+
+# create route tables and add internet gateways as traffic
+resource "aws_route_table" "rt-1" {
+  vpc_id = aws_vpc.vpc-1.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw-1.id
+  }
+}
+
+resource "aws_route_table" "rt-2" {
+  vpc_id = aws_vpc.vpc-2.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw-2.id
+  }
+}
+
+# associating subnets with respective route tables
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.subnet-1.id
+  route_table_id = aws_route_table.rt-1.id
+}
+
+resource "aws_route_table_association" "b" {
+  subnet_id      = aws_subnet.subnet-2.id
+  route_table_id = aws_route_table.rt-2.id
+}
+
+# creating security groups by adding inbound rules
+resource "aws_security_group" "sg_1" {
+  name   = "sg_1"
+  vpc_id = aws_vpc.vpc-1.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "sg_2" {
+  name   = "sg_2"
+  vpc_id = aws_vpc.vpc-2.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# creating instances with respective VPCs, subnets & security groups
+resource "aws_instance" "instance-1" {
+  ami                    = "ami-0fda19674ff597992"  # Replace with a valid AMI ID for your region
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.subnet-1.id
+  vpc_security_group_ids = [aws_security_group.sg_1.id]
+  user_data = <<-EOF
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install -y nginx                # install nginx for amazon linux
+              sudo systemctl start nginx
+              sudo systemctl enable nginx
+              echo "Hello from VPC1" | sudo tee /usr/share/nginx/html/index.html
+              EOF
+}
+
+output "instance-1_ip" {
+  value = aws_instance.instance-1.public_ip
+}
+
+resource "aws_instance" "instance-2" {
+  ami                    = "ami-0fda19674ff597992"  # Replace with a valid AMI ID for your region
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.subnet-2.id
+  vpc_security_group_ids = [aws_security_group.sg_2.id]
+  user_data = <<-EOF
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install -y nginx               # install nginx for amazon linux
+              sudo systemctl start nginx
+              sudo systemctl enable nginx
+              echo "Hello from VPC2" | sudo tee /usr/share/nginx/html/index.html
+              EOF
+}
+
+output "instance-2_ip" {
+  value = aws_instance.instance-2.public_ip
+}
+
+# creating VPC peering for two VPCs
+resource "aws_vpc_peering_connection" "peer" {
+  vpc_id      = aws_vpc.vpc-1.id
+  peer_vpc_id = aws_vpc.vpc-2.id
+  auto_accept = true
+}
+
+# Route to VPC 2 in VPC 1
+resource "aws_route" "route_to_vpc-2" {
+  route_table_id            = aws_route_table.rt-1.id
+  destination_cidr_block    = aws_vpc.vpc-2.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.peer.id
+}
+
+# Route to VPC 1 in VPC 2
+resource "aws_route" "route_to_vpc-1" {
+  route_table_id            = aws_route_table.rt-2.id
+  destination_cidr_block    = aws_vpc.vpc-1.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.peer.id
+}  
